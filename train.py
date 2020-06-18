@@ -143,7 +143,8 @@ def main():
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     print("Using GPU:", use_cuda)
     print("Using Torchaudio: ", utils._torchaudio_available())
-    dataloader_kwargs = {'num_workers': args.nb_workers, 'pin_memory': True} if use_cuda else {}
+    dataloader_kwargs = {'num_workers': args.nb_workers,
+                         'pin_memory': True} if use_cuda else {}
 
     repo_dir = os.path.abspath(os.path.dirname(__file__))
     repo = Repo(repo_dir)
@@ -180,11 +181,11 @@ def main():
         train_dataset.sample_rate, args.nfft, args.bandwidth
     )
 
-    unmix = model.OpenUnmix(
+    unmix = model.VQVadass(
         input_mean=scaler_mean,
         input_scale=scaler_std,
         nb_channels=args.nb_channels,
-        hidden_size=args.hidden_size,
+        num_embeddings=args.hidden_size,
         n_fft=args.nfft,
         n_hop=args.nhop,
         max_bin=max_bin,
@@ -256,12 +257,12 @@ def main():
             best_epoch = epoch
 
         utils.save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': unmix.state_dict(),
-                'best_loss': es.best,
-                'optimizer': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict()
-            },
+            'epoch': epoch + 1,
+            'state_dict': unmix.state_dict(),
+            'best_loss': es.best,
+            'optimizer': optimizer.state_dict(),
+            'scheduler': scheduler.state_dict()
+        },
             is_best=valid_loss == es.best,
             path=target_path,
             target=args.target

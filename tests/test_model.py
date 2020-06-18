@@ -57,14 +57,13 @@ def test_shape(
     n_fft,
     n_hop
 ):
-    unmix = model.OpenUnmix(
+    unmix = model.VQVadass(
         n_fft=n_fft,
         n_hop=n_hop,
         nb_channels=nb_channels,
         input_is_spectrogram=True,
-        unidirectional=unidirectional,
         nb_layers=nb_layers,
-        hidden_size=hidden_size
+        num_embeddings=hidden_size
     )
     unmix.eval()
     spec = torch.nn.Sequential(unmix.stft, unmix.spec)
