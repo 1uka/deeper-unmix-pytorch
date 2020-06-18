@@ -49,22 +49,24 @@ class VQVadass(nn.Module):
         else:
             self.transform = nn.Sequential(self.stft, self.spec)
 
-        # VQ-VAE model architecture
+        # VQ-VAE U-net model architecture
         # input shape: (B, C, N, F)
         padding = (kernel_size - stride) // 2 * dilation
-        self.enc1 = EncoderBlock2d(nb_channels, self.nb_bins // 4, kernel_size=kernel_size,
+        self.enc1 = EncoderBlock2d(nb_channels, 64, kernel_size=kernel_size,
                                    stride=stride, dilation=dilation, padding=padding)
-        self.enc2 = EncoderBlock2d(self.nb_bins // 4, self.nb_bins // 2, kernel_size=kernel_size,
+        self.enc2 = EncoderBlock2d(64, 128, kernel_size=kernel_size,
                                    stride=stride, dilation=dilation, padding=padding)
-        self.enc3 = EncoderBlock2d(self.nb_bins // 2, self.nb_bins, kernel_size=kernel_size,
+        self.enc3 = EncoderBlock2d(128, 256, kernel_size=kernel_size,
+                                   stride=stride, dilation=dilation, padding=padding)
+        self.enc4 = EncoderBlock2d(256, 512, kernel_size=kernel_size,
                                    stride=stride, dilation=dilation, padding=padding)
 
-        self.vq1 = VQEmbeddingEMA(num_embeddings, self.nb_bins)
+        self.vq1 = VQEmbeddingEMA(num_embeddings, 512)
 
-        self.dec1 = DecoderBlock2d(self.nb_bins, self.nb_bins // 2, context)
-        self.dec2 = DecoderBlock2d(
-            self.nb_bins // 2, self.nb_bins // 4, context)
-        self.dec3 = DecoderBlock2d(self.nb_bins // 4, nb_channels, context)
+        self.dec1 = DecoderBlock2d(512, 256, context)
+        self.dec2 = DecoderBlock2d(256, 128, context)
+        self.dec3 = DecoderBlock2d(128, 64, context)
+        self.dec4 = DecoderBlock2d(64, nb_channels, context)
 
         if input_mean is not None:
             input_mean = torch.from_numpy(
@@ -106,7 +108,7 @@ class VQVadass(nn.Module):
 
         # output from transform has shape (F, B, C, N)
         # but we want to convolute on B x (C x F x N), so we need to reshape
-        x = x.view(nb_samples, nb_channels, nb_frames, self.nb_bins)
+        x = x.reshape(nb_samples, nb_channels, nb_frames, self.nb_bins)
 
         # pass through encoder and save skip connections
         skip_conns = []
@@ -116,18 +118,24 @@ class VQVadass(nn.Module):
         skip_conns.append(x)
         x = self.enc3(x)
         skip_conns.append(x)
-        folded_shape = x.shape[-2:]
-        x = F.unfold(x, kernel_size=1)
+        x = self.enc4(x)
+        skip_conns.append(x)
+
+        # reshape to 3d for VQ embedding (flatten last 2 dimensions)
+        encoded_shape = x.shape
+        x = x.view(nb_samples, 512, -1)
 
         # apply VQ embedding
-        loss, x, _, _ = self.vq1(x)
+        embedding_loss, x, _, _ = self.vq1(x)
 
-        x = F.fold(x, folded_shape, kernel_size=1)
+        # reshape back to 4d
+        x = x.view(encoded_shape)
 
         # decode and apply skip connections
-        x = self.dec1(x, skip=skip_conns.pop())
-        x = self.dec2(x, skip=skip_conns.pop())
-        x = self.dec3(x, skip=skip_conns.pop())
+        x = self.dec1(x, skip=skip_conns.pop().detach())
+        x = self.dec2(x, skip=skip_conns.pop().detach())
+        x = self.dec3(x, skip=skip_conns.pop().detach())
+        x = self.dec4(x, skip=skip_conns.pop().detach())
 
         # pad what was lost in strided convolution (just a few dimensions hopefully)
         pad_N = abs(x.size(-1) - self.nb_output_bins)
@@ -144,7 +152,10 @@ class VQVadass(nn.Module):
         # since our output is non-negative, we can apply RELU
         x = F.relu(x)
 
-        return x
+        if self.training:
+            return x, embedding_loss
+        else:
+            return x
 
 
 if __name__ == "__main__":

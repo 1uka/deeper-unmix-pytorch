@@ -26,9 +26,10 @@ def train(args, unmix, device, train_sampler, optimizer):
         pbar.set_description("Training batch")
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
-        Y_hat = unmix(x)
+        Y_hat, embedding_loss = unmix(x)
         Y = unmix.transform(y)
-        loss = torch.nn.functional.mse_loss(Y_hat, Y)
+        recon_loss = torch.nn.functional.mse_loss(Y_hat, Y)
+        loss = recon_loss + embedding_loss
         loss.backward()
         optimizer.step()
         losses.update(loss.item(), Y.size(1))
