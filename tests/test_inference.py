@@ -36,7 +36,7 @@ def audio(request, nb_samples, nb_channels, nb_timesteps):
 
 
 def test_stft(audio, nb_channels, nfft, hop):
-    unmix = model.VQVadass(nb_channels=nb_channels)
+    unmix = model.Vaess(nb_channels=nb_channels)
     unmix.stft.center = True
     X = unmix.stft(audio)
     X = X.detach().numpy()

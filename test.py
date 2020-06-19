@@ -55,11 +55,11 @@ def load_model(target, model_name='umxhq', device='cpu'):
             results['args']['bandwidth']
         )
 
-        unmix = model.VQVadass(
+        unmix = model.Vaess(
             n_fft=results['args']['nfft'],
             n_hop=results['args']['nhop'],
             nb_channels=results['args']['nb_channels'],
-            num_embeddings=results['args']['hidden_size'],
+            latent_dim=results['args']['hidden_size'],
             max_bin=max_bin
         )
 

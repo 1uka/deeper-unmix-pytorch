@@ -26,10 +26,10 @@ def train(args, unmix, device, train_sampler, optimizer):
         pbar.set_description("Training batch")
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
-        Y_hat, embedding_loss = unmix(x)
+        Y_hat, mu, logvar = unmix(x)
         Y = unmix.transform(y)
         recon_loss = torch.nn.functional.mse_loss(Y_hat, Y)
-        loss = recon_loss + embedding_loss
+        loss = unmix.loss_function(Y_hat, Y, mu, logvar)
         loss.backward()
         optimizer.step()
         losses.update(loss.item(), Y.size(1))
@@ -42,9 +42,9 @@ def valid(args, unmix, device, valid_sampler):
     with torch.no_grad():
         for x, y in valid_sampler:
             x, y = x.to(device), y.to(device)
-            Y_hat = unmix(x)
+            Y_hat, mu, logvar = unmix(x)
             Y = unmix.transform(y)
-            loss = torch.nn.functional.mse_loss(Y_hat, Y)
+            loss = unmix.loss_function(Y_hat, Y, mu, logvar)
             losses.update(loss.item(), Y.size(1))
         return losses.avg
 
@@ -172,25 +172,26 @@ def main():
         **dataloader_kwargs
     )
 
-    if args.model:
-        scaler_mean = None
-        scaler_std = None
-    else:
-        scaler_mean, scaler_std = get_statistics(args, train_dataset)
+    # if args.model:
+    scaler_mean = None
+    scaler_std = None
+    # else:
+    #     scaler_mean, scaler_std = get_statistics(args, train_dataset)
 
     max_bin = utils.bandwidth_to_max_bin(
         train_dataset.sample_rate, args.nfft, args.bandwidth
     )
 
-    unmix = model.VQVadass(
+    unmix = model.Vaess(
         input_mean=scaler_mean,
         input_scale=scaler_std,
         nb_channels=args.nb_channels,
-        num_embeddings=args.hidden_size,
+        latent_dim=args.hidden_size,
         n_fft=args.nfft,
         n_hop=args.nhop,
         max_bin=max_bin,
-        sample_rate=train_dataset.sample_rate
+        sample_rate=train_dataset.sample_rate,
+        seq_dur=args.seq_dur
     ).to(device)
 
     optimizer = torch.optim.Adam(

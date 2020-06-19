@@ -51,22 +51,19 @@ def n_hop(request, n_fft):
 def test_shape(
     audio,
     nb_channels,
-    unidirectional,
-    nb_layers,
-    hidden_size,
+    latent_dim,
     n_fft,
     n_hop
 ):
-    unmix = model.VQVadass(
+    unmix = model.Vaess(
         n_fft=n_fft,
         n_hop=n_hop,
         nb_channels=nb_channels,
         input_is_spectrogram=True,
-        nb_layers=nb_layers,
-        num_embeddings=hidden_size
+        latent_dim=latent_dim
     )
     unmix.eval()
     spec = torch.nn.Sequential(unmix.stft, unmix.spec)
     X = spec(audio)
-    Y = unmix(X)
+    Y = unmix.generate(X)
     assert X.shape == Y.shape
