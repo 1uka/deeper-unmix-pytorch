@@ -15,7 +15,6 @@ class Vaess(nn.Module):
         latent_dim=128,
         nb_channels=2,
         sample_rate=44100,
-        seq_dur=6.0,
         input_mean=None,
         input_scale=None,
         max_bin=None,
@@ -66,15 +65,15 @@ class Vaess(nn.Module):
 
         encoded_size = self._calculate_flat_dim(
             self.nb_bins, kernel_size, padding, stride, dilation, 4)
-        n_frames = int(((sample_rate * seq_dur) - n_fft) // n_hop + 1)
+        n_frames = int((sample_rate - n_fft) // n_hop) + 1
         encoded_size *= self._calculate_flat_dim(
             n_frames, kernel_size, padding, stride, dilation, 4)
-        encoded_size *= self.hidden_dims[-1]
+        self.encoded_size = encoded_size * self.hidden_dims[-1]
 
-        self.fc_mu = nn.Linear(encoded_size, latent_dim)
-        self.fc_var = nn.Linear(encoded_size, latent_dim)
+        self.fc_mu = nn.Linear(self.encoded_size, latent_dim)
+        self.fc_var = nn.Linear(self.encoded_size, latent_dim)
 
-        self.fc_dec = nn.Linear(latent_dim, encoded_size)
+        self.fc_dec = nn.Linear(latent_dim, self.encoded_size)
 
         self.dec1 = DecoderBlock2d(
             self.hidden_dims[3], self.hidden_dims[2], context)
@@ -113,7 +112,7 @@ class Vaess(nn.Module):
         for _ in range(L):
             w = (w + 2*P - D*(F - 1) - 1) // S
 
-        return w
+        return abs(w)
 
     def encode(self, x):
         skip_conns = []
@@ -127,7 +126,7 @@ class Vaess(nn.Module):
         skip_conns.append(x)
 
         encoded_shape = x.data.shape
-        x = torch.flatten(x, start_dim=1)
+        x = x.view(x.size(0), -1, self.encoded_size)
 
         mu, logvar = self.fc_mu(x), self.fc_var(x)
 

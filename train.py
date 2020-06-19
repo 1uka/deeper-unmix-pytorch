@@ -28,7 +28,6 @@ def train(args, unmix, device, train_sampler, optimizer):
         optimizer.zero_grad()
         Y_hat, mu, logvar = unmix(x)
         Y = unmix.transform(y)
-        recon_loss = torch.nn.functional.mse_loss(Y_hat, Y)
         loss = unmix.loss_function(Y_hat, Y, mu, logvar)
         loss.backward()
         optimizer.step()
@@ -190,8 +189,7 @@ def main():
         n_fft=args.nfft,
         n_hop=args.nhop,
         max_bin=max_bin,
-        sample_rate=train_dataset.sample_rate,
-        seq_dur=args.seq_dur
+        sample_rate=train_dataset.sample_rate
     ).to(device)
 
     optimizer = torch.optim.Adam(
