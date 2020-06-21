@@ -27,11 +27,10 @@ def train(args, unmix, device, train_sampler, optimizer):
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
         Y_hat, mu, logvar = unmix(x)
-        Y = unmix.transform(y)
-        loss = unmix.loss_function(Y_hat, Y, mu, logvar)
+        loss = unmix.loss_function(Y_hat, y, mu, logvar)
         loss.backward()
         optimizer.step()
-        losses.update(loss.item(), Y.size(1))
+        losses.update(loss.item(), y.size(1))
     return losses.avg
 
 
@@ -42,19 +41,13 @@ def valid(args, unmix, device, valid_sampler):
         for x, y in valid_sampler:
             x, y = x.to(device), y.to(device)
             Y_hat, mu, logvar = unmix(x)
-            Y = unmix.transform(y)
-            loss = unmix.loss_function(Y_hat, Y, mu, logvar)
-            losses.update(loss.item(), Y.size(1))
+            loss = unmix.loss_function(Y_hat, y, mu, logvar)
+            losses.update(loss.item(), y.size(1))
         return losses.avg
 
 
 def get_statistics(args, dataset):
     scaler = sklearn.preprocessing.StandardScaler()
-
-    spec = torch.nn.Sequential(
-        model.STFT(n_fft=args.nfft, n_hop=args.nhop),
-        model.Spectrogram(mono=True)
-    )
 
     dataset_scaler = copy.deepcopy(dataset)
     dataset_scaler.samples_per_track = 1
@@ -67,8 +60,7 @@ def get_statistics(args, dataset):
     for ind in pbar:
         x, y = dataset_scaler[ind]
         pbar.set_description("Compute dataset statistics")
-        X = spec(x[None, ...])
-        scaler.partial_fit(np.squeeze(X))
+        scaler.partial_fit(np.squeeze(x))
 
     # set inital input scaler values
     std = np.maximum(
@@ -171,24 +163,9 @@ def main():
         **dataloader_kwargs
     )
 
-    if args.model:
-        scaler_mean = None
-        scaler_std = None
-    else:
-        scaler_mean, scaler_std = get_statistics(args, train_dataset)
-
-    max_bin = utils.bandwidth_to_max_bin(
-        train_dataset.sample_rate, args.nfft, args.bandwidth
-    )
-
     unmix = model.Vaess(
-        input_mean=scaler_mean,
-        input_scale=scaler_std,
         nb_channels=args.nb_channels,
         latent_dim=args.hidden_size,
-        n_fft=args.nfft,
-        n_hop=args.nhop,
-        max_bin=max_bin,
         sample_rate=train_dataset.sample_rate
     ).to(device)
 

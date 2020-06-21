@@ -84,6 +84,25 @@ class Spectrogram(nn.Module):
         return stft_f.permute(2, 0, 1, 3)
 
 
+class EncoderBlock1d(nn.Module):
+    def __init__(self, in_channels, out_channels, *args, **kwargs):
+        super(EncoderBlock1d, self).__init__()
+
+        self.encode_1 = nn.Sequential(
+            nn.Conv1d(in_channels, out_channels, *args, **kwargs),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+            nn.Conv1d(out_channels, out_channels * 2, kernel_size=2, stride=1),
+            nn.BatchNorm1d(out_channels * 2),
+            nn.GLU(dim=1),
+        )
+
+    def forward(self, x):
+        x = self.encode_1(x)
+
+        return x
+
+
 class EncoderBlock2d(nn.Module):
     def __init__(self, in_channels, out_channels, *args, **kwargs):
         super(EncoderBlock2d, self).__init__()
@@ -99,6 +118,39 @@ class EncoderBlock2d(nn.Module):
 
     def forward(self, x):
         x = self.encode_1(x)
+
+        return x
+
+
+class DecoderBlock1d(nn.Module):
+    def __init__(self, in_channels, out_channels, context):
+        super(DecoderBlock1d, self).__init__()
+
+        self.ct1 = nn.Sequential(
+            nn.ConvTranspose1d(in_channels, out_channels,
+                               kernel_size=2, stride=2),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+        )
+
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(out_channels, out_channels, kernel_size=context,
+                      stride=1, padding=context // 2),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+        )
+
+    def forward(self, x, skip=None):
+        if skip is not None:
+            diffX = skip.size(-1) - x.size(-1)
+            diffY = skip.size(-2) - x.size(-2)
+            x = F.pad(x, [diffX // 2, diffX - diffX // 2,
+                          diffY // 2, diffY - diffY // 2])
+
+            x = torch.tanh(x) * torch.sigmoid(skip)
+
+        x = self.ct1(x)
+        x = self.conv1(x)
 
         return x
 

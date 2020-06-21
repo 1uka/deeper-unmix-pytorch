@@ -2,23 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from modules import EncoderBlock2d, DecoderBlock2d, VQEmbeddingEMA, STFT, Spectrogram, NoOp
+from modules import EncoderBlock1d, DecoderBlock1d
 from utils import center_trim
 
 
 class Vaess(nn.Module):
     def __init__(
         self,
-        n_fft=4096,
-        n_hop=1024,
-        input_is_spectrogram=False,
         latent_dim=128,
         nb_channels=2,
         sample_rate=44100,
-        input_mean=None,
-        input_scale=None,
-        max_bin=None,
-        power=1,
         kernel_size=3,
         stride=2,
         dilation=1,
@@ -33,85 +26,35 @@ class Vaess(nn.Module):
 
         super(Vaess, self).__init__()
 
-        self.nb_output_bins = n_fft // 2 + 1
-        # actual formula is ((sample_rate * seq_dur) // n_hop) + 1
-        # but we cannot know seq_dur at runtime so we use this value
-        # to set the reshaping encoded size for embedding layer
-        self.nb_frames = int((sample_rate - n_fft) // n_hop) + 1
-
-        if max_bin:
-            self.nb_bins = max_bin
-        else:
-            self.nb_bins = self.nb_output_bins
-
         self.latent_dim = latent_dim
-        self.stft = STFT(n_fft=n_fft, n_hop=n_hop)
-        self.spec = Spectrogram(power=power, mono=(nb_channels == 1))
         self.register_buffer('sample_rate', torch.tensor(sample_rate))
-
-        if input_is_spectrogram:
-            self.transform = NoOp()
-        else:
-            self.transform = nn.Sequential(self.stft, self.spec)
 
         self.hidden_dims = [32, 64, 128, 256]
 
         # VAE U-net model architecture
         # input shape: (B, C, N, F)
         padding = (kernel_size - stride) // 2 * dilation
-        self.enc1 = EncoderBlock2d(nb_channels, self.hidden_dims[0], kernel_size=kernel_size,
+        self.enc1 = EncoderBlock1d(nb_channels, self.hidden_dims[0], kernel_size=kernel_size,
                                    stride=stride, dilation=dilation, padding=padding)
-        self.enc2 = EncoderBlock2d(self.hidden_dims[0], self.hidden_dims[1], kernel_size=kernel_size,
+        self.enc2 = EncoderBlock1d(self.hidden_dims[0], self.hidden_dims[1], kernel_size=kernel_size,
                                    stride=stride, dilation=dilation, padding=padding)
-        self.enc3 = EncoderBlock2d(self.hidden_dims[1], self.hidden_dims[2], kernel_size=kernel_size,
+        self.enc3 = EncoderBlock1d(self.hidden_dims[1], self.hidden_dims[2], kernel_size=kernel_size,
                                    stride=stride, dilation=dilation, padding=padding)
-        self.enc4 = EncoderBlock2d(self.hidden_dims[2], self.hidden_dims[3], kernel_size=kernel_size,
+        self.enc4 = EncoderBlock1d(self.hidden_dims[2], self.hidden_dims[3], kernel_size=kernel_size,
                                    stride=stride, dilation=dilation, padding=padding)
 
-        W = self._calculate_flat_dim(
-            self.nb_frames, kernel_size, padding, stride, dilation, 4)
-        H = self._calculate_flat_dim(
-            self.nb_bins, kernel_size, padding, stride, dilation, 4)
+        self.fc_mu = nn.Linear(self.hidden_dims[-1], latent_dim)
+        self.fc_var = nn.Linear(self.hidden_dims[-1], latent_dim)
 
-        self.encoded_shape = (self.hidden_dims[-1], -1, H)
-        self.encoded_size = W * H * self.hidden_dims[-1]
+        self.fc_dec = nn.Linear(latent_dim, self.hidden_dims[-1])
 
-        self.fc_mu = nn.Linear(self.encoded_size, latent_dim)
-        self.fc_var = nn.Linear(self.encoded_size, latent_dim)
-
-        self.fc_dec = nn.Linear(latent_dim, self.encoded_size)
-
-        self.dec1 = DecoderBlock2d(
+        self.dec1 = DecoderBlock1d(
             self.hidden_dims[3], self.hidden_dims[2], context)
-        self.dec2 = DecoderBlock2d(
+        self.dec2 = DecoderBlock1d(
             self.hidden_dims[2], self.hidden_dims[1], context)
-        self.dec3 = DecoderBlock2d(
+        self.dec3 = DecoderBlock1d(
             self.hidden_dims[1], self.hidden_dims[0], context)
-        self.dec4 = DecoderBlock2d(self.hidden_dims[0], nb_channels, context)
-
-        if input_mean is not None:
-            input_mean = torch.from_numpy(
-                -input_mean[:self.nb_bins]
-            ).float()
-        else:
-            input_mean = torch.zeros(self.nb_bins)
-
-        if input_scale is not None:
-            input_scale = torch.from_numpy(
-                1.0/input_scale[:self.nb_bins]
-            ).float()
-        else:
-            input_scale = torch.ones(self.nb_bins)
-
-        self.input_mean = nn.Parameter(input_mean)
-        self.input_scale = nn.Parameter(input_scale)
-
-        self.output_scale = nn.Parameter(
-            torch.ones(self.nb_output_bins).float()
-        )
-        self.output_mean = nn.Parameter(
-            torch.ones(self.nb_output_bins).float()
-        )
+        self.dec4 = DecoderBlock1d(self.hidden_dims[0], nb_channels, context)
 
     def _calculate_flat_dim(self, W, F, P, S, D, L):
         w = W
@@ -131,7 +74,8 @@ class Vaess(nn.Module):
         x = self.enc4(x)
         skip_conns.append(x)
 
-        x = x.view(x.size(0), -1, self.encoded_size)
+        # rotate so H is self.hidden_dims[-1]
+        x = x.permute(0, 2, 1)
 
         mu, logvar = self.fc_mu(x), self.fc_var(x)
 
@@ -139,7 +83,9 @@ class Vaess(nn.Module):
 
     def decode(self, x, skip_conns=None):
         x = self.fc_dec(x)
-        x = x.view(x.size(0), *self.encoded_shape)
+
+        # rotate back so W is self.hidden_dims[-1] channels
+        x = x.permute(0, 2, 1)
 
         if skip_conns is None:
             x = self.dec1(x)
@@ -161,36 +107,13 @@ class Vaess(nn.Module):
         return mu + eps*std
 
     def forward(self, x):
-        x = self.transform(x)
-        nb_frames, nb_samples, nb_channels, nb_bins = x.data.shape
-
-        mix = x.detach().clone()
-
-        x = x[..., :self.nb_bins]
-
-        x += self.input_mean
-        x *= self.input_scale
-
-        x = x.reshape(nb_samples, nb_channels, nb_frames, self.nb_bins)
-
         mu, logvar, skip_conns = self.encode(x)
         z = self.reparametarize(mu, logvar)
         recon_x = self.decode(z, skip_conns)
 
         # pad what was lost in strided convolution (just a few dimensions hopefully)
-        pad_N = abs(recon_x.size(-1) - self.nb_output_bins)
-        pad_F = abs(recon_x.size(-2) - nb_frames)
-        recon_x = F.pad(
-            recon_x, (0, pad_N, 0, pad_F), "constant", 0)
-
-        recon_x = recon_x.reshape(
-            nb_frames, nb_samples, nb_channels, self.nb_output_bins)
-
-        # apply output scaling
-        recon_x *= self.output_scale
-        recon_x += self.output_mean
-
-        recon_x = F.relu(recon_x) * mix
+        pad_N = abs(recon_x.size(-1) - x.size(-1))
+        recon_x = F.pad(recon_x, (0, pad_N), "constant", 0)
 
         return recon_x, mu, logvar
 
@@ -209,8 +132,7 @@ class Vaess(nn.Module):
         return self.forward(x)[0]
 
     def sample(self, num_samples, device):
-        x = torch.randn(num_samples, self.latent_dim,
-                        self.encoded_size).to(device).detach()
+        x = torch.randn(num_samples, self.latent_dim).to(device).detach()
         mu, logvar = self.fc_mu(x), self.fc_var(x)
         z = self.reparametarize(mu, logvar)
 
