@@ -34,6 +34,11 @@ class Vaess(nn.Module):
         super(Vaess, self).__init__()
 
         self.nb_output_bins = n_fft // 2 + 1
+        # actual formula is ((sample_rate * seq_dur) // n_hop) + 1
+        # but we cannot know seq_dur at runtime so we use this value
+        # to set the reshaping encoded size for embedding layer
+        self.nb_frames = int((sample_rate - n_fft) // n_hop) + 1
+
         if max_bin:
             self.nb_bins = max_bin
         else:
@@ -63,12 +68,13 @@ class Vaess(nn.Module):
         self.enc4 = EncoderBlock2d(self.hidden_dims[2], self.hidden_dims[3], kernel_size=kernel_size,
                                    stride=stride, dilation=dilation, padding=padding)
 
-        encoded_size = self._calculate_flat_dim(
+        W = self._calculate_flat_dim(
+            self.nb_frames, kernel_size, padding, stride, dilation, 4)
+        H = self._calculate_flat_dim(
             self.nb_bins, kernel_size, padding, stride, dilation, 4)
-        n_frames = int((sample_rate - n_fft) // n_hop) + 1
-        encoded_size *= self._calculate_flat_dim(
-            n_frames, kernel_size, padding, stride, dilation, 4)
-        self.encoded_size = encoded_size * self.hidden_dims[-1]
+
+        self.encoded_shape = (self.hidden_dims[-1], -1, H)
+        self.encoded_size = W * H * self.hidden_dims[-1]
 
         self.fc_mu = nn.Linear(self.encoded_size, latent_dim)
         self.fc_var = nn.Linear(self.encoded_size, latent_dim)
@@ -125,21 +131,26 @@ class Vaess(nn.Module):
         x = self.enc4(x)
         skip_conns.append(x)
 
-        encoded_shape = x.data.shape
         x = x.view(x.size(0), -1, self.encoded_size)
 
         mu, logvar = self.fc_mu(x), self.fc_var(x)
 
-        return mu, logvar, skip_conns, encoded_shape
+        return mu, logvar, skip_conns
 
-    def decode(self, x, skip_conns, encoded_shape):
+    def decode(self, x, skip_conns=None):
         x = self.fc_dec(x)
-        x = x.view(encoded_shape)
+        x = x.view(x.size(0), *self.encoded_shape)
 
-        x = self.dec1(x, skip=skip_conns.pop().detach())
-        x = self.dec2(x, skip=skip_conns.pop().detach())
-        x = self.dec3(x, skip=skip_conns.pop().detach())
-        x = self.dec4(x, skip=skip_conns.pop().detach())
+        if skip_conns is None:
+            x = self.dec1(x)
+            x = self.dec2(x)
+            x = self.dec3(x)
+            x = self.dec4(x)
+        else:
+            x = self.dec1(x, skip=skip_conns.pop().detach())
+            x = self.dec2(x, skip=skip_conns.pop().detach())
+            x = self.dec3(x, skip=skip_conns.pop().detach())
+            x = self.dec4(x, skip=skip_conns.pop().detach())
 
         return x
 
@@ -162,9 +173,9 @@ class Vaess(nn.Module):
 
         x = x.reshape(nb_samples, nb_channels, nb_frames, self.nb_bins)
 
-        mu, logvar, skip_conns, encoded_shape = self.encode(x)
+        mu, logvar, skip_conns = self.encode(x)
         z = self.reparametarize(mu, logvar)
-        recon_x = self.decode(z, skip_conns, encoded_shape)
+        recon_x = self.decode(z, skip_conns)
 
         # pad what was lost in strided convolution (just a few dimensions hopefully)
         pad_N = abs(recon_x.size(-1) - self.nb_output_bins)
@@ -196,3 +207,14 @@ class Vaess(nn.Module):
 
     def generate(self, x):
         return self.forward(x)[0]
+
+    def sample(self, num_samples, device):
+        x = torch.randn(num_samples, self.latent_dim,
+                        self.encoded_size).to(device).detach()
+        mu, logvar = self.fc_mu(x), self.fc_var(x)
+        z = self.reparametarize(mu, logvar)
+
+        z = z.to(device).detach()
+        output = self.decode(z, None)
+
+        return output

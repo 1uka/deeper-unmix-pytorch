@@ -15,7 +15,7 @@ from contextlib import redirect_stderr
 import io
 
 
-def load_model(target, model_name='umxhq', device='cpu'):
+def load_model(target, model_name='vaess', device='cpu'):
     """
     target model path can be either <target>.pth, or <target>-sha256.pth
     (as used on torchub)
@@ -84,7 +84,7 @@ def istft(X, rate=44100, n_fft=4096, n_hopsize=1024):
 def separate(
     audio,
     targets,
-    model_name='umxhq',
+    model_name='vaess',
     niter=1, softmask=False, alpha=1.0,
     residual_model=False, device='cpu'
 ):
@@ -102,7 +102,7 @@ def separate(
         to be loaded.
 
     model_name: str
-        name of torchhub model or path to model folder, defaults to `umxhq`
+        name of torchhub model or path to model folder, defaults to `vaess`
 
     niter: int
          Number of EM steps for refining initial estimates in a
@@ -142,7 +142,7 @@ def separate(
             model_name=model_name,
             device=device
         )
-        Vj = unmix_target(audio_torch).cpu().detach().numpy()
+        Vj = unmix_target.generate(audio_torch).cpu().detach().numpy()
         if softmask:
             # only exponentiate the model if we use softmask
             Vj = Vj**alpha
@@ -224,7 +224,7 @@ def inference_args(parser, remaining_args):
 
 def test_main(
     input_files=None, samplerate=44100, niter=1, alpha=1.0,
-    softmask=False, residual_model=False, model='umxhq',
+    softmask=False, residual_model=False, model='vaess',
     targets=('vocals', 'drums', 'bass', 'other'),
     outdir=None, start=0.0, duration=-1.0, no_cuda=False
 ):
@@ -345,7 +345,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         '--model',
-        default='umxhq',
+        default='vaess',
         type=str,
         help='path to mode base directory of pretrained models'
     )
