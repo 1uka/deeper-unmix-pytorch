@@ -29,11 +29,16 @@ class Vaess(nn.Module):
         self.latent_dim = latent_dim
         self.register_buffer('sample_rate', torch.tensor(sample_rate))
 
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.dilation = dilation
+        self.padding = (kernel_size - stride) // 2 * dilation
+        self.layers = 4
+
         self.hidden_dims = [32, 64, 128, 256]
 
         # VAE U-net model architecture
         # input shape: (B, C, N, F)
-        padding = (kernel_size - stride) // 2 * dilation
         self.enc1 = EncoderBlock1d(nb_channels, self.hidden_dims[0], kernel_size=kernel_size,
                                    stride=stride, dilation=dilation, padding=padding)
         self.enc2 = EncoderBlock1d(self.hidden_dims[0], self.hidden_dims[1], kernel_size=kernel_size,
@@ -131,8 +136,12 @@ class Vaess(nn.Module):
     def generate(self, x):
         return self.forward(x)[0]
 
-    def sample(self, num_samples, device):
-        x = torch.randn(num_samples, self.latent_dim).to(device).detach()
+    def sample(self, seconds, sample_rate, device):
+        num_samples = seconds * sample_rate
+        num_samples = self._calculate_flat_dim(
+            num_samples, self.kernel_size, self.padding, self.stride, self.dilation, self.layers)
+
+        x = torch.randn(num_samples, self.hidden_dims[-1]).to(device).detach()
         mu, logvar = self.fc_mu(x), self.fc_var(x)
         z = self.reparametarize(mu, logvar)
 

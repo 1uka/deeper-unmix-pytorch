@@ -24,13 +24,13 @@ def train(args, unmix, device, train_sampler, optimizer):
     pbar = tqdm.tqdm(train_sampler, disable=args.quiet)
     for x, y in pbar:
         pbar.set_description("Training batch")
-        x, y = x.to(device), y.to(device)
+        x, y = x.to(device), y.to(device).detach()
         optimizer.zero_grad()
         Y_hat, mu, logvar = unmix(x)
         loss = unmix.loss_function(Y_hat, y, mu, logvar)
         loss.backward()
         optimizer.step()
-        losses.update(loss.item(), y.size(1))
+        losses.update(loss.item(), y.size(0))
     return losses.avg
 
 
@@ -39,10 +39,10 @@ def valid(args, unmix, device, valid_sampler):
     unmix.eval()
     with torch.no_grad():
         for x, y in valid_sampler:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(device), y.to(device).detach()
             Y_hat, mu, logvar = unmix(x)
             loss = unmix.loss_function(Y_hat, y, mu, logvar)
-            losses.update(loss.item(), y.size(1))
+            losses.update(loss.item(), y.size(0))
         return losses.avg
 
 
