@@ -126,22 +126,11 @@ class OpenUnmix(nn.Module):
         else:
             self.transform = nn.Sequential(self.stft, self.spec)
 
-        self.fc1 = Linear(
-            self.nb_bins*nb_channels, hidden_size * 4,
-            bias=False
-        )
+        self.conv1 = nn.Conv1d(nb_channels, hidden_size // 4, 3, 2)
+        self.conv2 = nn.Conv1d(hidden_size // 4, hidden_size // 2, 3, 2)
+        self.conv3 = nn.Conv1d(hidden_size // 2, hidden_size, 3, 2)
 
-        self.fc2 = Linear(
-            hidden_size * 4, hidden_size * 2,
-            bias=False
-        )
-
-        self.fc3 = Linear(
-            hidden_size * 2, hidden_size,
-            bias=False
-        )
-
-        self.bn1 = BatchNorm1d(hidden_size)
+        self.bn1 = nn.BatchNorm1d(hidden_size)
 
         if unidirectional:
             lstm_hidden_size = hidden_size
@@ -157,29 +146,11 @@ class OpenUnmix(nn.Module):
             dropout=0.4,
         )
 
-        self.fc4 = Linear(
-            hidden_size*2, hidden_size,
-            bias=False
-        )
+        self.ct1 = nn.ConvTranspose1d(hidden_size, hidden_size // 2, 3, 2)
+        self.ct2 = nn.ConvTranspose1d(hidden_size // 2, hidden_size // 4, 3, 2)
+        self.ct3 = nn.ConvTranspose1d(hidden_size // 4, nb_channels, 3, 2)
 
-        self.fc5 = Linear(
-            hidden_size, hidden_size * 2,
-            bias=False
-        )
-
-        self.fc6 = Linear(
-            hidden_size * 2, hidden_size * 4,
-            bias=False
-        )
-
-        self.bn2 = BatchNorm1d(hidden_size * 4)
-
-        self.fc7 = Linear(
-            hidden_size * 4, self.nb_output_bins*nb_channels,
-            bias=False
-        )
-
-        self.bn3 = BatchNorm1d(self.nb_output_bins*nb_channels)
+        self.bn2 = nn.BatchNorm1d(nb_channels)
 
         if input_mean is not None:
             input_mean = torch.from_numpy(
@@ -223,32 +194,28 @@ class OpenUnmix(nn.Module):
 
         # to (nb_frames*nb_samples, nb_channels*nb_bins)
         # and encode to (nb_frames*nb_samples, hidden_size)
-        x = self.fc1(x.reshape(-1, nb_channels*self.nb_bins))
-        x = self.fc2(x)
-        x = self.fc3(x)
-        # normalize every instance in a batch
-        x = self.bn1(x)
-        x = x.reshape(nb_frames, nb_samples, self.hidden_size)
-        # squash range ot [-1, 1]
-        x = torch.tanh(x)
+        x = x.reshape(nb_samples, nb_channels, nb_frames * self.nb_bins)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.bn1(torch.tanh(x))
+
+        x = x.view(nb_samples, -1, self.hidden_size)
 
         # apply 3-layers of stacked LSTM
         lstm_out = self.lstm(x)
 
         # lstm skip connection
-        x = torch.cat([x, lstm_out[0]], -1)
+        x = x * torch.sigmoid(lstm_out[0])
 
-        # first dense stage + batch norm
-        x = self.fc4(x.reshape(-1, x.shape[-1]))
-        x = self.fc5(x)
-        x = self.fc6(x)
-        x = self.bn2(x)
+        x = x.view(nb_samples, self.hidden_size, -1)
+        x = self.ct1(x)
+        x = self.ct2(x)
+        x = self.ct3(x)
+        x = self.bn2(F.relu(x))
 
-        x = F.relu(x)
-
-        # second dense stage + layer norm
-        x = self.fc7(x)
-        x = self.bn3(x)
+        pad_F = abs(x.size(-1) - nb_frames * self.nb_bins)
+        x = F.pad(x, (0, pad_F), "constant", 0)
 
         # reshape back to original dim
         x = x.reshape(nb_frames, nb_samples, nb_channels, self.nb_output_bins)
