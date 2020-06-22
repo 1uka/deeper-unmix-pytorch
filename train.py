@@ -143,7 +143,8 @@ def main():
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     print("Using GPU:", use_cuda)
     print("Using Torchaudio: ", utils._torchaudio_available())
-    dataloader_kwargs = {'num_workers': args.nb_workers, 'pin_memory': True} if use_cuda else {}
+    dataloader_kwargs = {'num_workers': args.nb_workers,
+                         'pin_memory': True} if use_cuda else {}
 
     repo_dir = os.path.abspath(os.path.dirname(__file__))
     repo = Repo(repo_dir)
@@ -170,11 +171,11 @@ def main():
         **dataloader_kwargs
     )
 
-    if args.model:
-        scaler_mean = None
-        scaler_std = None
-    else:
-        scaler_mean, scaler_std = get_statistics(args, train_dataset)
+    # if args.model:
+    scaler_mean = None
+    scaler_std = None
+    # else:
+    #     scaler_mean, scaler_std = get_statistics(args, train_dataset)
 
     max_bin = utils.bandwidth_to_max_bin(
         train_dataset.sample_rate, args.nfft, args.bandwidth
@@ -256,12 +257,12 @@ def main():
             best_epoch = epoch
 
         utils.save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': unmix.state_dict(),
-                'best_loss': es.best,
-                'optimizer': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict()
-            },
+            'epoch': epoch + 1,
+            'state_dict': unmix.state_dict(),
+            'best_loss': es.best,
+            'optimizer': optimizer.state_dict(),
+            'scheduler': scheduler.state_dict()
+        },
             is_best=valid_loss == es.best,
             path=target_path,
             target=args.target
