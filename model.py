@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from modules import EncoderBlock2d, DecoderBlock2d, VQEmbeddingEMA, STFT, Spectrogram, NoOp
+from modules import EncoderBlock2d, DecoderBlock2d, STFT, Spectrogram, NoOp
 from utils import center_trim
 
 
@@ -12,7 +12,7 @@ class Vaess(nn.Module):
         n_fft=4096,
         n_hop=1024,
         input_is_spectrogram=False,
-        latent_dim=128,
+        latent_dim=512,
         nb_channels=2,
         sample_rate=44100,
         input_mean=None,
@@ -54,7 +54,7 @@ class Vaess(nn.Module):
         else:
             self.transform = nn.Sequential(self.stft, self.spec)
 
-        self.hidden_dims = [32, 64, 128, 256]
+        self.hidden_dims = [64, 128, 256]
 
         # VAE U-net model architecture
         # input shape: (B, C, N, F)
@@ -65,29 +65,28 @@ class Vaess(nn.Module):
                                    stride=stride, dilation=dilation, padding=padding)
         self.enc3 = EncoderBlock2d(self.hidden_dims[1], self.hidden_dims[2], kernel_size=kernel_size,
                                    stride=stride, dilation=dilation, padding=padding)
-        self.enc4 = EncoderBlock2d(self.hidden_dims[2], self.hidden_dims[3], kernel_size=kernel_size,
-                                   stride=stride, dilation=dilation, padding=padding)
 
-        W = self._calculate_flat_dim(
-            self.nb_frames, kernel_size, padding, stride, dilation, 4)
-        H = self._calculate_flat_dim(
-            self.nb_bins, kernel_size, padding, stride, dilation, 4)
+        self.fc1 = nn.Linear(
+            in_features=self.hidden_dims[-1], out_features=latent_dim, bias=False)
 
-        self.encoded_shape = (self.hidden_dims[-1], -1, H)
-        self.encoded_size = W * H * self.hidden_dims[-1]
+        self.lstm = nn.LSTM(
+            input_size=latent_dim,
+            hidden_size=latent_dim // 2,
+            num_layers=3,
+            bidirectional=True,
+            batch_first=False,
+            dropout=0.2,
+        )
 
-        self.fc_mu = nn.Linear(self.encoded_size, latent_dim)
-        self.fc_var = nn.Linear(self.encoded_size, latent_dim)
-
-        self.fc_dec = nn.Linear(latent_dim, self.encoded_size)
+        self.fc2 = nn.Linear(in_features=latent_dim * 2,
+                             out_features=self.hidden_dims[-1], bias=False)
 
         self.dec1 = DecoderBlock2d(
-            self.hidden_dims[3], self.hidden_dims[2], context)
-        self.dec2 = DecoderBlock2d(
             self.hidden_dims[2], self.hidden_dims[1], context)
-        self.dec3 = DecoderBlock2d(
+        self.dec2 = DecoderBlock2d(
             self.hidden_dims[1], self.hidden_dims[0], context)
-        self.dec4 = DecoderBlock2d(self.hidden_dims[0], nb_channels, context)
+        self.dec3 = DecoderBlock2d(
+            self.hidden_dims[0], nb_channels, context)
 
         if input_mean is not None:
             input_mean = torch.from_numpy(
@@ -128,37 +127,20 @@ class Vaess(nn.Module):
         skip_conns.append(x)
         x = self.enc3(x)
         skip_conns.append(x)
-        x = self.enc4(x)
-        skip_conns.append(x)
 
-        x = x.view(x.size(0), -1, self.encoded_size)
-
-        mu, logvar = self.fc_mu(x), self.fc_var(x)
-
-        return mu, logvar, skip_conns
+        return x, skip_conns
 
     def decode(self, x, skip_conns=None):
-        x = self.fc_dec(x)
-        x = x.view(x.size(0), *self.encoded_shape)
-
         if skip_conns is None:
             x = self.dec1(x)
             x = self.dec2(x)
             x = self.dec3(x)
-            x = self.dec4(x)
         else:
             x = self.dec1(x, skip=skip_conns.pop().detach())
             x = self.dec2(x, skip=skip_conns.pop().detach())
             x = self.dec3(x, skip=skip_conns.pop().detach())
-            x = self.dec4(x, skip=skip_conns.pop().detach())
 
         return x
-
-    def reparametarize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-
-        return mu + eps*std
 
     def forward(self, x):
         x = self.transform(x)
@@ -171,17 +153,30 @@ class Vaess(nn.Module):
         x += self.input_mean
         x *= self.input_scale
 
-        x = x.reshape(nb_samples, nb_channels, nb_frames, self.nb_bins)
+        x = x.reshape(nb_samples, nb_channels, self.nb_bins, nb_frames)
 
-        mu, logvar, skip_conns = self.encode(x)
-        z = self.reparametarize(mu, logvar)
-        recon_x = self.decode(z, skip_conns)
+        x, skip_conns = self.encode(x)
+        encoded_shape = x.data.shape
+
+        # rotate and embed with fc1
+        x = self.fc1(x.view(nb_samples, -1, self.hidden_dims[-1]))
+        x = torch.tanh(x)
+
+        # BLSTM step
+        lstm_out = self.lstm(x)
+
+        # add LSTM skip connection, fc2, rotate back and reconstruct
+        x = torch.cat([x, lstm_out[0]], -1)
+        x = F.relu(self.fc2(x))
+        x = x.view(encoded_shape)
+        recon_x = self.decode(x, skip_conns)
 
         # pad what was lost in strided convolution (just a few dimensions hopefully)
-        pad_N = abs(recon_x.size(-1) - self.nb_output_bins)
-        pad_F = abs(recon_x.size(-2) - nb_frames)
+        pad_F = abs(recon_x.size(-1) - nb_frames)
+        pad_N = abs(recon_x.size(-2) - self.nb_output_bins)
+
         recon_x = F.pad(
-            recon_x, (0, pad_N, 0, pad_F), "constant", 0)
+            recon_x, (0, pad_F, 0, pad_N), "constant", 0)
 
         recon_x = recon_x.reshape(
             nb_frames, nb_samples, nb_channels, self.nb_output_bins)
@@ -192,29 +187,9 @@ class Vaess(nn.Module):
 
         recon_x = F.relu(recon_x) * mix
 
-        return recon_x, mu, logvar
+        return recon_x
 
-    def loss_function(self, recon_x, x, mu, logvar):
+    def loss_function(self, recon_x, x):
         MSE = F.mse_loss(recon_x, x)
 
-        # see Appendix B from VAE paper:
-        # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
-        # https://arxiv.org/abs/1312.6114
-        # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-
-        return MSE + KLD
-
-    def generate(self, x):
-        return self.forward(x)[0]
-
-    def sample(self, num_samples, device):
-        x = torch.randn(num_samples, self.latent_dim,
-                        self.encoded_size).to(device).detach()
-        mu, logvar = self.fc_mu(x), self.fc_var(x)
-        z = self.reparametarize(mu, logvar)
-
-        z = z.to(device).detach()
-        output = self.decode(z, None)
-
-        return output
+        return MSE

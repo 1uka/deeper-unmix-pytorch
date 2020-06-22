@@ -26,9 +26,9 @@ def train(args, unmix, device, train_sampler, optimizer):
         pbar.set_description("Training batch")
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
-        Y_hat, mu, logvar = unmix(x)
+        Y_hat = unmix(x)
         Y = unmix.transform(y)
-        loss = unmix.loss_function(Y_hat, Y, mu, logvar)
+        loss = unmix.loss_function(Y_hat, Y)
         loss.backward()
         optimizer.step()
         losses.update(loss.item(), Y.size(1))
@@ -41,9 +41,9 @@ def valid(args, unmix, device, valid_sampler):
     with torch.no_grad():
         for x, y in valid_sampler:
             x, y = x.to(device), y.to(device)
-            Y_hat, mu, logvar = unmix(x)
+            Y_hat = unmix(x)
             Y = unmix.transform(y)
-            loss = unmix.loss_function(Y_hat, Y, mu, logvar)
+            loss = unmix.loss_function(Y_hat, Y)
             losses.update(loss.item(), Y.size(1))
         return losses.avg
 

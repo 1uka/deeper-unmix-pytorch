@@ -65,5 +65,5 @@ def test_shape(
     unmix.eval()
     spec = torch.nn.Sequential(unmix.stft, unmix.spec)
     X = spec(audio)
-    Y = unmix.generate(X)
+    Y = unmix(X)
     assert X.shape == Y.shape

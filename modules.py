@@ -90,11 +90,9 @@ class EncoderBlock2d(nn.Module):
 
         self.encode_1 = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, *args, **kwargs),
+            nn.MaxPool2d(1, 1),
+            nn.Sigmoid(),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
-            nn.Conv2d(out_channels, out_channels * 2, kernel_size=2, stride=1),
-            nn.BatchNorm2d(out_channels * 2),
-            nn.GLU(dim=1),
         )
 
     def forward(self, x):
@@ -110,14 +108,13 @@ class DecoderBlock2d(nn.Module):
         self.ct1 = nn.Sequential(
             nn.ConvTranspose2d(in_channels, out_channels,
                                kernel_size=2, stride=2),
-            nn.BatchNorm2d(out_channels),
             nn.ReLU(),
+            nn.BatchNorm2d(out_channels),
         )
 
         self.conv1 = nn.Sequential(
             nn.Conv2d(out_channels, out_channels, kernel_size=context,
                       stride=1, padding=context // 2),
-            nn.BatchNorm2d(out_channels),
             nn.ReLU(),
         )
 
