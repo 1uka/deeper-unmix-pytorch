@@ -158,6 +158,11 @@ class OpenUnmix(nn.Module):
 
         self.bn2 = nn.BatchNorm2d(nb_channels)
 
+        # in case stft is cropped, dont pad with 0's; instead "learn the padding"
+        self.fc3 = nn.Linear(self.nb_bins * nb_channels,
+                             self.nb_output_bins * nb_channels)
+        self.bn3(self.nb_output_bins * nb_channels)
+
         if input_mean is not None:
             input_mean = torch.from_numpy(
                 -input_mean[:self.nb_bins]
@@ -226,11 +231,14 @@ class OpenUnmix(nn.Module):
         x = F.relu(self.ct3(x))
         x = self.bn2(x)
 
+        # pad frames and cropped bins
         pad_F = abs(x.size(-1) - nb_frames)
-        pad_N = abs(x.size(-2) - self.nb_output_bins)
+        pad_N = abs(x.size(-2) - self.nb_bins)
         x = F.pad(x, (0, pad_F, 0, pad_N), "constant", 0)
 
-        # reshape back to original dim
+        x = self.fc3(x.view(nb_frames, nb_samples, nb_channels * self.nb_bins))
+        x = self.bn3(x)
+
         x = x.reshape(nb_frames, nb_samples, nb_channels, self.nb_output_bins)
 
         # apply output scaling
