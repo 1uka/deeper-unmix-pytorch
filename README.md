@@ -1,3 +1,21 @@
+# Deeper-Unmix
+
+This model is a modified version of the Open-Unmix music source separation model.
+
+Changes made:
+
+- on master: add more FC layers for a deep encoder-decoder architecture
+- on deeper-unmix: refactor to convolutional autoencoder model architecture, keep the BLSTM layer
+- on vqvae:
+  - the first couple commits were a vector quantized variational autoencoder
+  - but then it became just a convolutional VAE
+- on vaess-lstm: similar to deeper-unmix, but with `modules.py` for encoder decoder modules, a bit tidier version
+- on vaess-td: variational autoencoder, but in time domain (works with waveforms)
+
+From all of these modified models, only the model from the master branch has been trained and evaluated.
+
+The following text is from the official Open-Unmix repository README.
+
 #  _Open-Unmix_ for PyTorch
 
 [![status](https://joss.theoj.org/papers/571753bc54c5d6dd36382c3d801de41d/status.svg)](https://joss.theoj.org/papers/571753bc54c5d6dd36382c3d801de41d) [![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/open-unmix-a-reference-implementation-for/music-source-separation-on-musdb18)](https://paperswithcode.com/sota/music-source-separation-on-musdb18?p=open-unmix-a-reference-implementation-for)
@@ -128,13 +146,13 @@ Note that
 
 #### Scores (Median of frames, Median of tracks)
 
-|target|SDR  |SIR  | SAR | ISR | SDR | SIR | SAR | ISR |
-|------|-----|-----|-----|-----|-----|-----|-----|-----|
-|`model`|UMX  |UMX  |UMX  |UMX |UMXHQ|UMXHQ|UMXHQ|UMXHQ|
-|vocals|6.32 |13.33| 6.52|11.93| 6.25|12.95| 6.50|12.70|
-|bass  |5.23 |10.93| 6.34| 9.23| 5.07|10.35| 6.02| 9.71|
-|drums |5.73 |11.12| 6.02|10.51| 6.04|11.65| 5.93|11.17|
-|other |4.02 |6.59 | 4.74| 9.31| 4.28| 7.10| 4.62| 8.78|
+| target  | SDR  | SIR   | SAR  | ISR   | SDR   | SIR   | SAR   | ISR   |
+| ------- | ---- | ----- | ---- | ----- | ----- | ----- | ----- | ----- |
+| `model` | UMX  | UMX   | UMX  | UMX   | UMXHQ | UMXHQ | UMXHQ | UMXHQ |
+| vocals  | 6.32 | 13.33 | 6.52 | 11.93 | 6.25  | 12.95 | 6.50  | 12.70 |
+| bass    | 5.23 | 10.93 | 6.34 | 9.23  | 5.07  | 10.35 | 6.02  | 9.71  |
+| drums   | 5.73 | 11.12 | 6.02 | 10.51 | 6.04  | 11.65 | 5.93  | 11.17 |
+| other   | 4.02 | 6.59  | 4.74 | 9.31  | 4.28  | 7.10  | 4.62  | 8.78  |
 
 ## Training
 
