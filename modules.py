@@ -159,8 +159,13 @@ class SFFilter(nn.Module):
         self.pool = nn.MaxPool2d(3, 3)
 
     def forward(self, x):
-        x = F.relu(self.pool(self.network(x)))
-        x = x.view(-1, self.channels, self.bins)
+        x = self.pool(self.network(x))
+
+        # we want last dimension to be 1 always, and penultimate to be
+        # the number of audio channels, which is anyways accomplished with
+        # the convolution
+        x = F.relu(torch.mean(x, -1))
+        x = x.reshape(-1, self.channels, self.bins)
 
         return x
 
