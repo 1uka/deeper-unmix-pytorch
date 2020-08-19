@@ -45,7 +45,8 @@ def valid(args, unmix, device, valid_sampler):
             Y = unmix.transform(y)
             loss = torch.nn.functional.mse_loss(Y_hat, Y)
             losses.update(loss.item(), Y.size(1))
-        return losses.avg
+
+    return losses.avg
 
 
 def get_statistics(args, dataset):
@@ -241,8 +242,15 @@ def main():
     for epoch in t:
         t.set_description("Training Epoch")
         end = time.time()
+
         train_loss = train(args, unmix, device, train_sampler, optimizer)
+        if use_cuda:
+            torch.cuda.empty_cache()
+
         valid_loss = valid(args, unmix, device, valid_sampler)
+        if use_cuda:
+            torch.cuda.empty_cache()
+
         scheduler.step(valid_loss)
         train_losses.append(train_loss)
         valid_losses.append(valid_loss)

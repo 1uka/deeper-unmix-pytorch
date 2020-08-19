@@ -112,9 +112,9 @@ class EncoderBlock2d(nn.Module):
         )
 
     def forward(self, x):
-        output = self.encode(x)
+        x = self.encode(x)
 
-        return output
+        return x
 
 
 class SFFilter(nn.Module):
@@ -165,7 +165,7 @@ class SFFilter(nn.Module):
         # the number of audio channels, which is anyways accomplished with
         # the convolution
         x = F.relu(torch.mean(x, -1))
-        x = x.reshape(-1, self.channels, self.bins)
+        x = x.view(-1, self.channels, self.bins)
 
         return x
 

@@ -161,10 +161,8 @@ class OpenUnmix(nn.Module):
         x *= self.output_scale
         x += self.output_mean
 
-        # apply filters
-        x *= filters
-
         # since our output is non-negative, we can apply RELU
-        x = F.relu(x) * mix
+        # and apply filters and mix
+        x = F.relu(x) * mix * filters
 
         return x
