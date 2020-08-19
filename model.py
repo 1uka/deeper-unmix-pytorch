@@ -3,85 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-class NoOp(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        return x
-
-
-class STFT(nn.Module):
-    def __init__(
-        self,
-        n_fft=4096,
-        n_hop=1024,
-        center=False
-    ):
-        super(STFT, self).__init__()
-        self.window = nn.Parameter(
-            torch.hann_window(n_fft),
-            requires_grad=False
-        )
-        self.n_fft = n_fft
-        self.n_hop = n_hop
-        self.center = center
-
-    def forward(self, x):
-        """
-        Input: (nb_samples, nb_channels, nb_timesteps)
-        Output:(nb_samples, nb_channels, nb_bins, nb_frames, 2)
-        """
-
-        nb_samples, nb_channels, nb_timesteps = x.size()
-
-        # merge nb_samples and nb_channels for multichannel stft
-        x = x.reshape(nb_samples*nb_channels, -1)
-
-        # compute stft with parameters as close as possible scipy settings
-        stft_f = torch.stft(
-            x,
-            n_fft=self.n_fft, hop_length=self.n_hop,
-            window=self.window, center=self.center,
-            normalized=False, onesided=True,
-            pad_mode='reflect'
-        )
-
-        # reshape back to channel dimension
-        stft_f = stft_f.contiguous().view(
-            nb_samples, nb_channels, self.n_fft // 2 + 1, -1, 2
-        )
-        return stft_f
-
-
-class Spectrogram(nn.Module):
-    def __init__(
-        self,
-        power=1,
-        mono=True
-    ):
-        super(Spectrogram, self).__init__()
-        self.power = power
-        self.mono = mono
-
-    def forward(self, stft_f):
-        """
-        Input: complex STFT
-            (nb_samples, nb_bins, nb_frames, 2)
-        Output: Power/Mag Spectrogram
-            (nb_frames, nb_samples, nb_channels, nb_bins)
-        """
-        stft_f = stft_f.transpose(2, 3)
-        # take the magnitude
-        stft_f = stft_f.pow(2).sum(-1).pow(self.power / 2.0)
-
-        # downmix in the mag domain
-        if self.mono:
-            stft_f = torch.mean(stft_f, 1, keepdim=True)
-
-        # permute output for LSTM convenience
-        return stft_f.permute(2, 0, 1, 3)
+from modules import NoOp, STFT, Spectrogram, SFFilter
 
 
 class OpenUnmix(nn.Module):
@@ -127,17 +49,7 @@ class OpenUnmix(nn.Module):
             self.transform = nn.Sequential(self.stft, self.spec)
 
         self.fc1 = Linear(
-            self.nb_bins*nb_channels, hidden_size * 4,
-            bias=False
-        )
-
-        self.fc2 = Linear(
-            hidden_size * 4, hidden_size * 2,
-            bias=False
-        )
-
-        self.fc3 = Linear(
-            hidden_size * 2, hidden_size,
+            self.nb_bins*nb_channels, hidden_size,
             bias=False
         )
 
@@ -154,32 +66,25 @@ class OpenUnmix(nn.Module):
             num_layers=nb_layers,
             bidirectional=not unidirectional,
             batch_first=False,
-            dropout=0.4,
+            dropout=0.3,
         )
 
-        self.fc4 = Linear(
+        self.fc2 = Linear(
             hidden_size*2, hidden_size,
             bias=False
         )
 
-        self.fc5 = Linear(
-            hidden_size, hidden_size * 2,
-            bias=False
-        )
+        self.bn2 = BatchNorm1d(hidden_size)
 
-        self.fc6 = Linear(
-            hidden_size * 2, hidden_size * 4,
-            bias=False
-        )
-
-        self.bn2 = BatchNorm1d(hidden_size * 4)
-
-        self.fc7 = Linear(
-            hidden_size * 4, self.nb_output_bins*nb_channels,
+        self.fc3 = Linear(
+            hidden_size, self.nb_output_bins*nb_channels,
             bias=False
         )
 
         self.bn3 = BatchNorm1d(self.nb_output_bins*nb_channels)
+
+        self.sff = SFFilter(nb_channels, self.nb_output_bins,
+                            kernel_size=4, stride=2, padding=2)
 
         if input_mean is not None:
             input_mean = torch.from_numpy(
@@ -214,6 +119,9 @@ class OpenUnmix(nn.Module):
 
         mix = x.detach().clone()
 
+        # calculate filters before cropping
+        filters = self.sff(x.permute(1, 2, 3, 0))
+
         # crop
         x = x[..., :self.nb_bins]
 
@@ -224,8 +132,6 @@ class OpenUnmix(nn.Module):
         # to (nb_frames*nb_samples, nb_channels*nb_bins)
         # and encode to (nb_frames*nb_samples, hidden_size)
         x = self.fc1(x.reshape(-1, nb_channels*self.nb_bins))
-        x = self.fc2(x)
-        x = self.fc3(x)
         # normalize every instance in a batch
         x = self.bn1(x)
         x = x.reshape(nb_frames, nb_samples, self.hidden_size)
@@ -239,15 +145,13 @@ class OpenUnmix(nn.Module):
         x = torch.cat([x, lstm_out[0]], -1)
 
         # first dense stage + batch norm
-        x = self.fc4(x.reshape(-1, x.shape[-1]))
-        x = self.fc5(x)
-        x = self.fc6(x)
+        x = self.fc2(x.reshape(-1, x.shape[-1]))
         x = self.bn2(x)
 
         x = F.relu(x)
 
         # second dense stage + layer norm
-        x = self.fc7(x)
+        x = self.fc3(x)
         x = self.bn3(x)
 
         # reshape back to original dim
@@ -256,6 +160,9 @@ class OpenUnmix(nn.Module):
         # apply output scaling
         x *= self.output_scale
         x += self.output_mean
+
+        # apply filters
+        x *= filters
 
         # since our output is non-negative, we can apply RELU
         x = F.relu(x) * mix
