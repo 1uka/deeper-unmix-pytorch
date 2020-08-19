@@ -127,7 +127,8 @@ class SFFilter(nn.Module):
     def __init__(self, channels, bins, *args, **kwargs):
         """Initialize the SFF
 
-        This module expects input with shape (batch_size, channels, bins, frames)
+        This module expects input with shape (batch_size, channels, bins, frames),
+        and gives (batch_size, channels, bins) shaped output.
 
         Parameters
         ----------
@@ -159,7 +160,7 @@ class SFFilter(nn.Module):
 
     def forward(self, x):
         x = F.relu(self.pool(self.network(x)))
-        x = x.view(self.channels, self.bins)
+        x = x.view(-1, self.channels, self.bins)
 
         return x
 
