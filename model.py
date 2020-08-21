@@ -84,7 +84,7 @@ class OpenUnmix(nn.Module):
         self.bn3 = BatchNorm1d(self.nb_output_bins*nb_channels)
 
         self.sff = SFFilter(nb_channels, self.nb_output_bins,
-                            kernel_size=4, stride=2, padding=2)
+                            hidden_size, kernel_size=5, stride=2, padding=5 // 2)
 
         if input_mean is not None:
             input_mean = torch.from_numpy(
@@ -135,14 +135,17 @@ class OpenUnmix(nn.Module):
         # normalize every instance in a batch
         x = self.bn1(x)
         x = x.reshape(nb_frames, nb_samples, self.hidden_size)
-        # squash range ot [-1, 1]
-        x = torch.tanh(x)
+
+        # squash x and apply filters before LSTM
+        x = torch.tanh(x) * torch.sigmoid(filters)
+        del filters
 
         # apply 3-layers of stacked LSTM
         lstm_out = self.lstm(x)
 
         # lstm skip connection
         x = torch.cat([x, lstm_out[0]], -1)
+        del lstm_out
 
         # first dense stage + batch norm
         x = self.fc2(x.reshape(-1, x.shape[-1]))
@@ -162,7 +165,6 @@ class OpenUnmix(nn.Module):
         x += self.output_mean
 
         # since our output is non-negative, we can apply RELU
-        # and apply filters and mix
-        x = F.relu(x) * mix * filters
+        x = F.relu(x) * mix
 
         return x

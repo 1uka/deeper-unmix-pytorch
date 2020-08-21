@@ -117,6 +117,37 @@ class EncoderBlock2d(nn.Module):
         return x
 
 
+class DecoderBlock2d(nn.Module):
+    """Decoder block for upsampling using transposed convolution
+
+    Meant to be used during reconstruction of the latent representation
+    gained from SFFilter after encoding the input spectrogram.
+    """
+
+    def __init__(self, in_channels, out_channels, *args, **kwargs):
+        """Initialize the DecoderBlock2d module
+
+        Parameters
+        ----------
+        in_channels : int
+            input channels dimension
+        out_channels : int
+            output channels, dimension of the original spectrogram
+        """
+        super(DecoderBlock2d, self).__init__()
+
+        self.decode = nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, *args, **kwargs),
+            nn.ReLU(),
+            nn.BatchNorm2d(out_channels),
+        )
+
+    def forward(self, x, skip_conns=None):
+        x = self.decode(x)
+
+        return x
+
+
 class SFFilter(nn.Module):
     """A frequency filter module for audio spectrograms, using multiple EncoderBlock2d.
 
@@ -124,7 +155,7 @@ class SFFilter(nn.Module):
     be applied over a different spectrogram.
     """
 
-    def __init__(self, channels, bins, *args, **kwargs):
+    def __init__(self, channels, bins, hidden_size, *args, **kwargs):
         """Initialize the SFF
 
         This module expects input with shape (batch_size, channels, bins, frames),
@@ -141,31 +172,26 @@ class SFFilter(nn.Module):
 
         self.channels = channels
         self.bins = bins
+        self.hidden_size = hidden_size
 
-        blocks = []
-        in_channels = channels
-        out_channels = 64
-        layers = 4
-        for _ in range(layers):
-            blocks += [EncoderBlock2d(in_channels, out_channels,
-                                      *args, **kwargs), nn.MaxPool2d(2, 2)]
-            in_channels = out_channels
-            out_channels *= 2
-
-        blocks += [EncoderBlock2d(in_channels, bins,
-                                  kernel_size=8, stride=3, padding=8)]
+        blocks = [EncoderBlock2d(
+            channels, 16, *args, **kwargs), nn.MaxPool2d(2, 2)]
+        blocks += [EncoderBlock2d(16, 32, *args, **kwargs), nn.MaxPool2d(2, 2)]
+        blocks += [EncoderBlock2d(32, 64, *args, **kwargs), nn.MaxPool2d(2, 2)]
+        blocks += [EncoderBlock2d(64, 128, *args, **
+                                  kwargs), nn.MaxPool2d(2, 2)]
+        blocks += [EncoderBlock2d(128, 256, *args, **
+                                  kwargs), nn.MaxPool2d(2, 2)]
 
         self.network = nn.Sequential(*blocks)
-        self.pool = nn.MaxPool2d(3, 3)
 
     def forward(self, x):
-        x = self.pool(self.network(x))
+        segment_len = x.size(-1)
+        padding = abs(1024 - (segment_len % 1024))
+        x = F.pad(x, (0, padding, 0, 0))
 
-        # we want last dimension to be 1 always, and penultimate to be
-        # the number of audio channels, which is anyways accomplished with
-        # the convolution
-        x = F.relu(torch.mean(x, -1))
-        x = x.view(-1, self.channels, self.bins)
+        x = torch.mean(self.network(x), -1)
+        x = x.reshape(-1, self.hidden_size)
 
         return x
 
@@ -180,9 +206,9 @@ if __name__ == "__main__":
 
     transform = nn.Sequential(stft, spec)
 
-    kernel_size = 4
+    kernel_size = 5
     padding = kernel_size // 2
-    ff = SFFilter(2, 2049, kernel_size=kernel_size,
+    ff = SFFilter(2, 2049, 512, kernel_size=kernel_size,
                   stride=2, padding=padding)
 
     x = transform(s).permute(1, 2, 3, 0)

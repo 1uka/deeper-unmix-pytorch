@@ -32,6 +32,12 @@ def train(args, unmix, device, train_sampler, optimizer):
         loss.backward()
         optimizer.step()
         losses.update(loss.item(), Y.size(1))
+
+        # free up memory
+        del x, y, Y_hat, Y, loss
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
     return losses.avg
 
 
@@ -45,6 +51,11 @@ def valid(args, unmix, device, valid_sampler):
             Y = unmix.transform(y)
             loss = torch.nn.functional.mse_loss(Y_hat, Y)
             losses.update(loss.item(), Y.size(1))
+
+            # free up memory
+            del x, y, Y_hat, Y, loss
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
 
     return losses.avg
 
